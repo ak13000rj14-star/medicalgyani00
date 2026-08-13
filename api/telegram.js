@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(200).send("Bot is running");
@@ -12,54 +14,107 @@ export default async function handler(req, res) {
   const chatId = message.chat.id;
   const text = message.text || "";
 
-  // /start
   if (text === "/start") {
-    const keyboard = {
-      inline_keyboard: [
-        [
-          {
-            text: "💳 Pay ₹30",
-            url: "https://rzp.io/rzp/Y0tRQN2"
-          }
+    try {
+      const auth = Buffer.from(
+        `${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`
+      ).toString("base64");
+
+      const response = await fetch(
+        "https://api.razorpay.com/v1/payment_links",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Basic ${auth}`
+          },
+          body: JSON.stringify({
+            amount: 3000,
+            currency: "INR",
+            accept_partial: false,
+            description: "Medical Gyani - Medicine Guidance",
+            reference_id: `TG_${chatId}_${Date.now()}`,
+            notes: {
+              telegram_chat_id: String(chatId)
+            },
+            notify: {
+              sms: false,
+              email: false
+            },
+            reminder_enable: false
+          })
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data.short_url) {
+        console.error("Razorpay error:", data);
+
+        await sendTelegram(
+          chatId,
+          "❌ Payment link बनाने में समस्या आ गई। कृपया थोड़ी देर बाद फिर कोशिश करें।"
+        );
+
+        return res.status(200).json({ ok: true });
+      }
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: "💳 Pay ₹30",
+              url: data.short_url
+            }
+          ]
         ]
-      ]
-    };
+      };
 
-    await fetch(
-      `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text:
-            "💊 Medical Gyani\n\n" +
-            "Personal Medicine Guidance की fee ₹30 है।\n\n" +
-            "नीचे Pay ₹30 दबाकर payment करें।\n\n" +
-            "Payment के बाद payment screenshot/Transaction ID इसी chat में भेज दें।",
-          reply_markup: keyboard
-        })
-      }
-    );
-  }
+      await fetch(
+        `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text:
+              "💊 Medical Gyani\n\n" +
+              "Personal Medicine Guidance की fee ₹30 है।\n\n" +
+              "नीचे Pay ₹30 दबाकर payment करें।\n\n" +
+              "Payment successful होने के बाद आपको इसी chat में confirmation मिलेगा।",
+            reply_markup: keyboard
+          })
+        }
+      );
+    } catch (error) {
+      console.error(error);
 
-  // Payment screenshot/photo
-  if (message.photo) {
-    await fetch(
-      `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text:
-            "✅ Payment screenshot मिल गया है।\n\n" +
-            "आपका screenshot verification के लिए भेज दिया गया है।\n" +
-            "कृपया थोड़ी देर प्रतीक्षा करें।"
-        })
-      }
-    );
+      await sendTelegram(
+        chatId,
+        "❌ कुछ technical problem आ गई। कृपया थोड़ी देर बाद /start भेजें।"
+      );
+    }
   }
 
   return res.status(200).json({ ok: true });
+}
+
+async function sendTelegram(chatId, text, replyMarkup = undefined) {
+  const body = {
+    chat_id: chatId,
+    text
+  };
+
+  if (replyMarkup) {
+    body.reply_markup = replyMarkup;
+  }
+
+  return fetch(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }
+  );
 }
