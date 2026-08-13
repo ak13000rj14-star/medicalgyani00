@@ -2,7 +2,7 @@ import crypto from "crypto";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(200).send("Razorpay webhook is running");
+    return res.status(200).send("Webhook is running");
   }
 
   try {
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     ) {
       return res.status(400).json({
         ok: false,
-        error: "Invalid webhook signature"
+        error: "Invalid signature"
       });
     }
 
@@ -43,15 +43,47 @@ export default async function handler(req, res) {
       const payment =
         event.payload?.payment?.entity;
 
-      console.log("Payment successful:", {
-        paymentLinkId: paymentLink?.id,
-        paymentId: payment?.id,
-        amount: payment?.amount,
-        status: payment?.status
-      });
+      const chatId =
+        paymentLink?.notes?.telegram_chat_id;
 
-      // Payment verified successfully.
-      // Telegram customer mapping will be added next.
+      if (!chatId) {
+        console.log("Telegram chat ID not found");
+        return res.status(200).json({ ok: true });
+      }
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: "💬 Chat with Medical Gyani",
+              url: "https://t.me/ak1300kom"
+            }
+          ]
+        ]
+      };
+
+      await fetch(
+        `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text:
+              "✅ Payment Successful!\n\n" +
+              "आपका ₹30 payment verify हो गया है।\n\n" +
+              "अब अपनी medicine/query के लिए मुझसे directly बात करें 👇",
+            reply_markup: keyboard
+          })
+        }
+      );
+
+      console.log("Payment approved:", {
+        paymentId: payment?.id,
+        chatId
+      });
     }
 
     return res.status(200).json({ ok: true });
