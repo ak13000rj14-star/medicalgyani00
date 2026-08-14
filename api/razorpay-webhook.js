@@ -1,40 +1,60 @@
 import crypto from "crypto";
 
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(200).send("Webhook is running");
   }
 
   try {
-    const rawBody =
-      typeof req.body === "string"
-        ? req.body
-        : JSON.stringify(req.body);
+    // Get RAW request body
+    const chunks = [];
+
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+
+    const rawBody = Buffer.concat(chunks);
 
     const signature = req.headers["x-razorpay-signature"];
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    const expectedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest("hex");
-
-    if (
-      !signature ||
-      !crypto.timingSafeEqual(
-        Buffer.from(signature),
-        Buffer.from(expectedSignature)
-      )
-    ) {
+    if (!signature || !secret) {
+      console.error("Missing webhook signature or secret");
       return res.status(400).json({
         ok: false,
-        error: "Invalid signature"
+        error: "Missing signature or secret",
       });
     }
 
-    const event =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : req.body;
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(rawBody)
+      .digest("hex");
+
+    const signatureBuffer = Buffer.from(signature, "utf8");
+    const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+
+    if (
+      signatureBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+    ) {
+      console.error("Invalid Razorpay webhook signature");
+
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid signature",
+      });
+    }
+
+    const event = JSON.parse(rawBody.toString("utf8"));
+
+    console.log("Razorpay event:", event.event);
 
     if (event.event === "payment_link.paid") {
       const paymentLink =
@@ -46,9 +66,15 @@ export default async function handler(req, res) {
       const chatId =
         paymentLink?.notes?.telegram_chat_id;
 
+      console.log("Telegram chat ID:", chatId);
+
       if (!chatId) {
-        console.log("Telegram chat ID not found");
-        return res.status(200).json({ ok: true });
+        console.error("Telegram chat ID not found in payment link notes");
+
+        return res.status(200).json({
+          ok: true,
+          message: "Payment received but Telegram chat ID not found",
+        });
       }
 
       const keyboard = {
@@ -56,18 +82,18 @@ export default async function handler(req, res) {
           [
             {
               text: "💬 Chat with Medical Gyani",
-              url: "https://t.me/ak1300kom"
-            }
-          ]
-        ]
+              url: "https://t.me/ak1300kom",
+            },
+          ],
+        ],
       };
 
-      await fetch(
+      const telegramResponse = await fetch(
         `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
             chat_id: chatId,
@@ -75,25 +101,39 @@ export default async function handler(req, res) {
               "✅ Payment Successful!\n\n" +
               "आपका ₹30 payment verify हो गया है।\n\n" +
               "अब अपनी medicine/query के लिए मुझसे directly बात करें 👇",
-            reply_markup: keyboard
-          })
+            reply_markup: keyboard,
+          }),
         }
       );
 
+      const telegramResult = await telegramResponse.json();
+
+      console.log("Telegram response:", telegramResult);
+
+      if (!telegramResponse.ok) {
+        console.error("Telegram sendMessage failed:", telegramResult);
+
+        return res.status(500).json({
+          ok: false,
+          error: "Telegram message failed",
+        });
+      }
+
       console.log("Payment approved:", {
         paymentId: payment?.id,
-        chatId
+        chatId,
       });
     }
 
-    return res.status(200).json({ ok: true });
-
+    return res.status(200).json({
+      ok: true,
+    });
   } catch (error) {
     console.error("Webhook error:", error);
 
     return res.status(500).json({
       ok: false,
-      error: "Webhook processing failed"
+      error: "Webhook processing failed",
     });
   }
 }
